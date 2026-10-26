@@ -61,6 +61,8 @@ logging_stream = sys.stdout if is_env_truthy("MCP_LOGGING_STDOUT") else sys.stde
 # Set up logging using the utility function
 logger = setup_logging(logging_level, logging_stream)
 
+_PARENT_EXIT_GRACE_SECONDS = 5
+
 
 async def _watch_parent_exit(stop_event: threading.Event) -> None:
     parent_pid = os.getppid()
@@ -102,6 +104,12 @@ async def _run_stdio_with_stdin_guard(run_kwargs: dict[str, object]) -> None:
     if parent_task in done and not server_task.done():
         logger.info("Parent process exited. Shutting down STDIO server.")
         server_task.cancel()
+        # Cancellation never finishes while the AnyIO thread reading stdin is
+        # blocked (stdin can still be held open elsewhere), so give the server
+        # a moment to clean up, then exit without waiting on that thread.
+        await asyncio.wait({server_task}, timeout=_PARENT_EXIT_GRACE_SECONDS)
+        ensure_clean_exit()
+        os._exit(0)
 
     for task in pending:
         task.cancel()

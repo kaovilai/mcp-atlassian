@@ -141,9 +141,13 @@ class TestMainTransportSelection:
             with patch(
                 "mcp_atlassian._watch_parent_exit", side_effect=fake_watch_parent
             ):
-                await _run_stdio_with_stdin_guard({"transport": "stdio"})
+                # Parent exit ends the process without joining the stdin reader
+                with patch("os._exit", side_effect=SystemExit) as exit_:
+                    with pytest.raises(SystemExit):
+                        await _run_stdio_with_stdin_guard({"transport": "stdio"})
 
         assert server_cancelled.is_set()
+        exit_.assert_called_once_with(0)
 
     @pytest.mark.asyncio
     async def test_stdio_guard_stops_parent_watch_when_cancelled(self):
@@ -225,3 +229,16 @@ class TestMainTransportSelection:
                             assert (
                                 mock_exit.call_args_list[1][0][0] == 0
                             )  # Finally exit
+
+    def test_signal_shutdown_exits_without_joining_stdin_reader(self, mock_server):
+        """Signal shutdown must not wait on the blocked stdin reader thread."""
+        with patch("mcp_atlassian.servers.main.AtlassianMCP", return_value=mock_server):
+            with patch("asyncio.run", side_effect=KeyboardInterrupt):
+                with patch("mcp_atlassian.setup_signal_handlers"):
+                    with patch.dict("os.environ", {"TRANSPORT": "stdio"}):
+                        with patch("sys.argv", ["mcp-atlassian"]):
+                            with patch("os._exit", side_effect=SystemExit) as exit_:
+                                with pytest.raises(SystemExit):
+                                    main()
+
+        exit_.assert_called_once_with(0)
