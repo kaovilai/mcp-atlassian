@@ -142,7 +142,10 @@ class TestMainTransportSelection:
                 "mcp_atlassian._watch_parent_exit", side_effect=fake_watch_parent
             ):
                 # Parent exit ends the process without joining the stdin reader
-                with patch("os._exit", side_effect=SystemExit) as exit_:
+                with (
+                    patch("os._exit", side_effect=SystemExit) as exit_,
+                    patch("mcp_atlassian.start_shutdown_deadline"),
+                ):
                     with pytest.raises(SystemExit):
                         await _run_stdio_with_stdin_guard({"transport": "stdio"})
 
@@ -237,7 +240,10 @@ class TestMainTransportSelection:
                 with patch("mcp_atlassian.setup_signal_handlers"):
                     with patch.dict("os.environ", {"TRANSPORT": "stdio"}):
                         with patch("sys.argv", ["mcp-atlassian"]):
-                            with patch("os._exit", side_effect=SystemExit) as exit_:
+                            with (
+                                patch("os._exit", side_effect=SystemExit) as exit_,
+                                patch("mcp_atlassian.start_shutdown_deadline"),
+                            ):
                                 with pytest.raises(SystemExit):
                                     main()
 

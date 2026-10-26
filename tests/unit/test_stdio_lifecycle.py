@@ -9,6 +9,8 @@ import time
 
 import pytest
 
+from mcp_atlassian.utils import lifecycle
+
 
 def _build_probe_payload() -> str:
     messages = [
@@ -148,3 +150,38 @@ def test_stdio_exits_when_parent_exits_while_stdin_open() -> None:
     finally:
         with contextlib.suppress(ProcessLookupError):
             os.kill(server_pid, signal.SIGKILL)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals")
+def test_stdio_sigterm_exit_is_bounded_when_stdout_is_blocked() -> None:
+    # Pre-fill stdout and never drain it, so writing the initialize response
+    # blocks and graceful shutdown cannot finish on its own.
+    out_r, out_w = os.pipe()
+    os.set_blocking(out_w, False)
+    with contextlib.suppress(BlockingIOError):
+        while True:
+            os.write(out_w, b"x" * 4096)
+    os.set_blocking(out_w, True)
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "from mcp_atlassian import main; main()"],
+        stdin=subprocess.PIPE,
+        stdout=out_w,
+        stderr=subprocess.PIPE,
+        env={**_server_env(), "MCP_VERBOSE": "true"},
+    )
+    os.close(out_w)
+    assert proc.stdin is not None and proc.stderr is not None
+    try:
+        started = b""
+        while b"Starting MCP server" not in started:
+            ready, _, _ = select.select([proc.stderr], [], [], 30)
+            assert ready, "server did not start"
+            started += os.read(proc.stderr.fileno(), 4096)
+        proc.stdin.write(_build_probe_payload().splitlines()[0].encode() + b"\n")
+        proc.stdin.flush()
+        time.sleep(1)
+        proc.send_signal(signal.SIGTERM)
+        proc.wait(timeout=lifecycle.SHUTDOWN_DEADLINE_SECONDS + 10)
+    finally:
+        proc.kill()
+        os.close(out_r)

@@ -41,6 +41,7 @@ from mcp_atlassian.utils.env import is_env_truthy
 from mcp_atlassian.utils.lifecycle import (
     ensure_clean_exit,
     setup_signal_handlers,
+    start_shutdown_deadline,
 )
 from mcp_atlassian.utils.logging import setup_logging
 
@@ -103,6 +104,7 @@ async def _run_stdio_with_stdin_guard(run_kwargs: dict[str, object]) -> None:
 
     if parent_task in done and not server_task.done():
         logger.info("Parent process exited. Shutting down STDIO server.")
+        start_shutdown_deadline()
         server_task.cancel()
         # Cancellation never finishes while the AnyIO thread reading stdin is
         # blocked (stdin can still be held open elsewhere), so give the server
@@ -483,6 +485,7 @@ def main(
     except (KeyboardInterrupt, SystemExit) as e:
         logger.info(f"Server shutdown initiated: {type(e).__name__}")
         if isinstance(e, KeyboardInterrupt):
+            start_shutdown_deadline()
             ensure_clean_exit()
             # SIGTERM/SIGINT: an AnyIO worker thread can still be blocked reading
             # stdin (the client may keep it open), and interpreter shutdown

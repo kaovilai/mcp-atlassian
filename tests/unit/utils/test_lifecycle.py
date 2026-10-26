@@ -1,6 +1,7 @@
 """Tests for lifecycle management utilities."""
 
 import signal
+import threading
 from unittest.mock import patch
 
 import pytest
@@ -89,16 +90,38 @@ class TestSetupSignalHandlers:
         setup_signal_handlers()
         assert handler is not None
 
-        with patch.object(lifecycle, "_shutting_down", new=False):
+        with (
+            patch.object(lifecycle, "_shutting_down", new=False),
+            patch.object(lifecycle, "start_shutdown_deadline") as mock_deadline,
+        ):
             # First signal unwinds the server through the normal shutdown path
+            # and arms the forced-exit deadline
             with pytest.raises(KeyboardInterrupt):
                 handler(signal.SIGTERM, None)
+            mock_deadline.assert_called_once_with()
 
             # Second signal during shutdown exits immediately
             with patch("os._exit", side_effect=SystemExit) as mock_exit:
                 with pytest.raises(SystemExit):
                     handler(signal.SIGTERM, None)
             mock_exit.assert_called_once_with(128 + signal.SIGTERM)
+
+    def test_shutdown_deadline_forces_exit(self):
+        """Shutdown still running past the deadline is forced to exit."""
+        exited = threading.Event()
+
+        with (
+            patch.object(lifecycle, "_deadline_fd", new=None),
+            patch.object(lifecycle, "SHUTDOWN_DEADLINE_SECONDS", new=0.05),
+            patch("os._exit", side_effect=lambda code: exited.set()) as mock_exit,
+        ):
+            lifecycle._start_shutdown_watchdog()
+            assert not exited.wait(0.2)  # idle until shutdown starts
+
+            lifecycle.start_shutdown_deadline()
+            assert exited.wait(5)
+
+        mock_exit.assert_called_once_with(1)
 
     @pytest.mark.skipif(not hasattr(signal, "SIGPIPE"), reason="Unix only")
     @patch("signal.signal")
