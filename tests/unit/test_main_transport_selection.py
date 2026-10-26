@@ -150,12 +150,15 @@ class TestMainTransportSelection:
         """Cancelling the guard (SIGTERM/SIGINT) must stop the watcher thread."""
         watch_started = asyncio.Event()
         stop_events = []
+        inner_tasks = []
 
         async def fake_run_async(**kwargs):
             del kwargs
+            inner_tasks.append(asyncio.current_task())
             await asyncio.Event().wait()
 
         async def fake_watch_parent(stop_event) -> None:
+            inner_tasks.append(asyncio.current_task())
             stop_events.append(stop_event)
             watch_started.set()
             await asyncio.Event().wait()
@@ -174,8 +177,9 @@ class TestMainTransportSelection:
                 with pytest.raises(asyncio.CancelledError):
                     await guard
 
-        for task in asyncio.all_tasks() - {asyncio.current_task()}:
+        for task in inner_tasks:
             task.cancel()
+        await asyncio.gather(*inner_tasks, return_exceptions=True)
         assert stop_events[0].is_set()
 
     def test_signal_handlers_always_setup(self, mock_server):

@@ -23,9 +23,10 @@ def _handle_termination(signum: int, frame: Any) -> None:
 def setup_signal_handlers() -> None:
     """Set up signal handlers for graceful shutdown.
 
-    SIGTERM and SIGINT raise KeyboardInterrupt in the main thread, so the server
-    unwinds through asyncio's normal cancellation path and ``main()`` exits. A
-    second signal during that shutdown exits immediately.
+    SIGINT keeps Python's default handler, so ``asyncio.run()`` cancels the main
+    task on the first Ctrl+C. SIGTERM raises KeyboardInterrupt in the main
+    thread, so the server unwinds and ``main()`` exits; a second SIGTERM during
+    that shutdown exits immediately.
     SIGPIPE (Unix/Linux only) is ignored so writes to a closed pipe raise
     BrokenPipeError instead of killing the process.
 
@@ -46,7 +47,7 @@ def setup_signal_handlers() -> None:
     """
     # Register signal handlers
     signal.signal(signal.SIGTERM, _handle_termination)
-    signal.signal(signal.SIGINT, _handle_termination)
+    signal.signal(signal.SIGINT, signal.default_int_handler)
 
     # Handle SIGPIPE which occurs when parent process closes the pipe
     # SIGPIPE is not available on Windows, so we check for it first

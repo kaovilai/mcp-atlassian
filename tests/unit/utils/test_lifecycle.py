@@ -31,6 +31,9 @@ class TestSetupSignalHandlers:
         for call in mock_signal.call_args_list:
             assert callable(call[0][1]) or call[0][1] == signal.SIG_IGN
 
+        # SIGINT keeps the default so asyncio.run() can cancel the main task
+        mock_signal.assert_any_call(signal.SIGINT, signal.default_int_handler)
+
     @patch("signal.signal")
     def test_setup_signal_handlers_no_sigpipe(self, mock_signal):
         """Test signal handler setup when SIGPIPE is not available (Windows)."""
