@@ -85,6 +85,17 @@ def _initialize(proc: subprocess.Popen[bytes]) -> None:
     assert b'"id":1' in proc.stdout.readline()
 
 
+def _is_running(pid: int) -> bool:
+    """True if pid is alive and not a zombie awaiting reaping by its new parent."""
+    state = subprocess.run(
+        ["ps", "-o", "stat=", "-p", str(pid)],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.strip()
+    return bool(state) and not state.startswith("Z")
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals")
 def test_stdio_exits_on_sigterm_while_stdin_open() -> None:
     proc = subprocess.Popen(
@@ -129,9 +140,7 @@ def test_stdio_exits_when_parent_exits_while_stdin_open() -> None:
         proc.wait(timeout=15)
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
-            try:
-                os.kill(server_pid, 0)
-            except ProcessLookupError:
+            if not _is_running(server_pid):
                 break
             time.sleep(0.5)
         else:
