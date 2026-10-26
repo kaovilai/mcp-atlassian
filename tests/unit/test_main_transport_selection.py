@@ -145,6 +145,39 @@ class TestMainTransportSelection:
 
         assert server_cancelled.is_set()
 
+    @pytest.mark.asyncio
+    async def test_stdio_guard_stops_parent_watch_when_cancelled(self):
+        """Cancelling the guard (SIGTERM/SIGINT) must stop the watcher thread."""
+        watch_started = asyncio.Event()
+        stop_events = []
+
+        async def fake_run_async(**kwargs):
+            del kwargs
+            await asyncio.Event().wait()
+
+        async def fake_watch_parent(stop_event) -> None:
+            stop_events.append(stop_event)
+            watch_started.set()
+            await asyncio.Event().wait()
+
+        with patch(
+            "mcp_atlassian.servers.main_mcp.run_async", side_effect=fake_run_async
+        ):
+            with patch(
+                "mcp_atlassian._watch_parent_exit", side_effect=fake_watch_parent
+            ):
+                guard = asyncio.create_task(
+                    _run_stdio_with_stdin_guard({"transport": "stdio"})
+                )
+                await watch_started.wait()
+                guard.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await guard
+
+        for task in asyncio.all_tasks() - {asyncio.current_task()}:
+            task.cancel()
+        assert stop_events[0].is_set()
+
     def test_signal_handlers_always_setup(self, mock_server):
         """Test that signal handlers are set up regardless of transport."""
         with patch("mcp_atlassian.servers.main.AtlassianMCP", return_value=mock_server):

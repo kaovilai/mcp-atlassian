@@ -3,8 +3,10 @@
 import signal
 from unittest.mock import patch
 
+import pytest
+
+from mcp_atlassian.utils import lifecycle
 from mcp_atlassian.utils.lifecycle import (
-    _shutdown_event,
     ensure_clean_exit,
     setup_signal_handlers,
 )
@@ -25,9 +27,9 @@ class TestSetupSignalHandlers:
         assert any(call[0][0] == signal.SIGTERM for call in mock_signal.call_args_list)
         assert any(call[0][0] == signal.SIGINT for call in mock_signal.call_args_list)
 
-        # Check that all handlers are callable
+        # Check that all handlers are callable or explicitly ignored
         for call in mock_signal.call_args_list:
-            assert callable(call[0][1])
+            assert callable(call[0][1]) or call[0][1] == signal.SIG_IGN
 
     @patch("signal.signal")
     def test_setup_signal_handlers_no_sigpipe(self, mock_signal):
@@ -70,7 +72,7 @@ class TestSetupSignalHandlers:
 
     @patch("signal.signal")
     def test_signal_handler_function(self, mock_signal):
-        """Test that the signal handler function works correctly."""
+        """SIGTERM raises KeyboardInterrupt, a repeat signal forces exit."""
         handler = None
 
         # Capture the handler function
@@ -81,17 +83,27 @@ class TestSetupSignalHandlers:
 
         mock_signal.side_effect = capture_handler
 
-        # Clear the shutdown event before test
-        _shutdown_event.clear()
+        setup_signal_handlers()
+        assert handler is not None
 
+        with patch.object(lifecycle, "_shutting_down", new=False):
+            # First signal unwinds the server through the normal shutdown path
+            with pytest.raises(KeyboardInterrupt):
+                handler(signal.SIGTERM, None)
+
+            # Second signal during shutdown exits immediately
+            with patch("os._exit", side_effect=SystemExit) as mock_exit:
+                with pytest.raises(SystemExit):
+                    handler(signal.SIGTERM, None)
+            mock_exit.assert_called_once_with(128 + signal.SIGTERM)
+
+    @pytest.mark.skipif(not hasattr(signal, "SIGPIPE"), reason="Unix only")
+    @patch("signal.signal")
+    def test_sigpipe_ignored(self, mock_signal):
+        """SIGPIPE is ignored rather than routed to a Python handler."""
         setup_signal_handlers()
 
-        # Call the handler
-        assert handler is not None
-        handler(signal.SIGTERM, None)
-
-        # Check shutdown event was set instead of calling sys.exit
-        assert _shutdown_event.is_set()
+        mock_signal.assert_any_call(signal.SIGPIPE, signal.SIG_IGN)
 
 
 class TestEnsureCleanExit:

@@ -1,25 +1,36 @@
 """Lifecycle management utilities for graceful shutdown and signal handling."""
 
 import logging
+import os
 import signal
 import sys
-import threading
 from typing import Any
 
 logger = logging.getLogger("mcp-atlassian.utils.lifecycle")
 
-# Global shutdown event for signal-safe handling
-_shutdown_event = threading.Event()
+_shutting_down = False
+
+
+def _handle_termination(signum: int, frame: Any) -> None:
+    """Start shutdown on the first signal; force exit on a repeat."""
+    global _shutting_down
+    if _shutting_down:
+        os._exit(128 + signum)
+    _shutting_down = True
+    raise KeyboardInterrupt
 
 
 def setup_signal_handlers() -> None:
     """Set up signal handlers for graceful shutdown.
 
-    Registers handlers for SIGTERM, SIGINT, and SIGPIPE (Unix/Linux only) to ensure
-    the application shuts down cleanly when receiving termination signals.
+    SIGTERM and SIGINT raise KeyboardInterrupt in the main thread, so the server
+    unwinds through asyncio's normal cancellation path and ``main()`` exits. A
+    second signal during that shutdown exits immediately.
+    SIGPIPE (Unix/Linux only) is ignored so writes to a closed pipe raise
+    BrokenPipeError instead of killing the process.
 
     Platform Behavior:
-        - Unix/Linux: SIGPIPE handled to prevent process termination on client disconnect
+        - Unix/Linux: SIGPIPE ignored to prevent process termination on client disconnect
         - Windows: SIGPIPE not available (socket errors returned directly instead)
 
     This is particularly important for:
@@ -28,28 +39,20 @@ def setup_signal_handlers() -> None:
         - Long-running server processes with unreliable clients
 
     Note:
-        SIGPIPE handling is CRITICAL on Unix/Linux. Without it, the server process
-        terminates when writing to a closed pipe (e.g., when an MCP client disconnects).
+        The handlers must not swallow termination signals or take locks: a
+        handler that only records the signal leaves the process running after
+        the client is gone, and one that blocks on a lock can deadlock the
+        event loop when signals arrive back to back.
     """
-
-    def signal_handler(signum: int, frame: Any) -> None:
-        """Handle shutdown signals gracefully.
-
-        Uses event-based shutdown to avoid signal safety issues.
-        Signal handlers should be minimal and avoid complex operations.
-        """
-        # Only safe operations in signal handlers - set the shutdown event
-        _shutdown_event.set()
-
     # Register signal handlers
-    signal.signal(signal.SIGTERM, signal_handler)
-    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, _handle_termination)
+    signal.signal(signal.SIGINT, _handle_termination)
 
     # Handle SIGPIPE which occurs when parent process closes the pipe
     # SIGPIPE is not available on Windows, so we check for it first
     if hasattr(signal, "SIGPIPE"):
-        signal.signal(signal.SIGPIPE, signal_handler)
-        logger.debug("SIGPIPE handler registered")
+        signal.signal(signal.SIGPIPE, signal.SIG_IGN)
+        logger.debug("SIGPIPE ignored")
     else:
         # SIGPIPE may not be available on all platforms (e.g., Windows)
         logger.debug("SIGPIPE not available on this platform")
