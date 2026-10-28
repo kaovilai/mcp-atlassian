@@ -100,19 +100,19 @@ def _is_running(pid: int) -> bool:
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals")
 def test_stdio_exits_on_sigterm_while_stdin_open() -> None:
-    proc = subprocess.Popen(
+    with subprocess.Popen(
         [sys.executable, "-c", "from mcp_atlassian import main; main()"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
         env=_server_env(),
-    )
-    try:
-        _initialize(proc)
-        proc.send_signal(signal.SIGTERM)
-        assert proc.wait(timeout=15) == 0
-    finally:
-        proc.kill()
+    ) as proc:
+        try:
+            _initialize(proc)
+            proc.send_signal(signal.SIGTERM)
+            assert proc.wait(timeout=15) == 0
+        finally:
+            proc.kill()
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX reparenting")
@@ -121,7 +121,7 @@ def test_stdio_exits_when_parent_exits_while_stdin_open() -> None:
     # server is up reparents it while this test still holds the write end of
     # its stdin. stdin goes through fd 3 because sh points background jobs'
     # stdin at /dev/null.
-    proc = subprocess.Popen(
+    with subprocess.Popen(
         [
             "sh",
             "-c",
@@ -133,23 +133,23 @@ def test_stdio_exits_when_parent_exits_while_stdin_open() -> None:
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
         env=_server_env(),
-    )
-    assert proc.stdout is not None
-    server_pid = int(proc.stdout.readline())
-    try:
-        _initialize(proc)
-        proc.kill()
-        proc.wait(timeout=15)
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            if not _is_running(server_pid):
-                break
-            time.sleep(0.5)
-        else:
-            pytest.fail("server still running after its parent exited")
-    finally:
-        with contextlib.suppress(ProcessLookupError):
-            os.kill(server_pid, signal.SIGKILL)
+    ) as proc:
+        assert proc.stdout is not None
+        server_pid = int(proc.stdout.readline())
+        try:
+            _initialize(proc)
+            proc.kill()
+            proc.wait(timeout=15)
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                if not _is_running(server_pid):
+                    break
+                time.sleep(0.5)
+            else:
+                pytest.fail("server still running after its parent exited")
+        finally:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(server_pid, signal.SIGKILL)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals")
@@ -162,26 +162,26 @@ def test_stdio_sigterm_exit_is_bounded_when_stdout_is_blocked() -> None:
         while True:
             os.write(out_w, b"x" * 4096)
     os.set_blocking(out_w, True)
-    proc = subprocess.Popen(
+    with subprocess.Popen(
         [sys.executable, "-c", "from mcp_atlassian import main; main()"],
         stdin=subprocess.PIPE,
         stdout=out_w,
         stderr=subprocess.PIPE,
         env={**_server_env(), "MCP_VERBOSE": "true"},
-    )
-    os.close(out_w)
-    assert proc.stdin is not None and proc.stderr is not None
-    try:
-        started = b""
-        while b"Starting MCP server" not in started:
-            ready, _, _ = select.select([proc.stderr], [], [], 30)
-            assert ready, "server did not start"
-            started += os.read(proc.stderr.fileno(), 4096)
-        proc.stdin.write(_build_probe_payload().splitlines()[0].encode() + b"\n")
-        proc.stdin.flush()
-        time.sleep(1)
-        proc.send_signal(signal.SIGTERM)
-        proc.wait(timeout=lifecycle.SHUTDOWN_DEADLINE_SECONDS + 10)
-    finally:
-        proc.kill()
-        os.close(out_r)
+    ) as proc:
+        os.close(out_w)
+        assert proc.stdin is not None and proc.stderr is not None
+        try:
+            started = b""
+            while b"Starting MCP server" not in started:
+                ready, _, _ = select.select([proc.stderr], [], [], 30)
+                assert ready, "server did not start"
+                started += os.read(proc.stderr.fileno(), 4096)
+            proc.stdin.write(_build_probe_payload().splitlines()[0].encode() + b"\n")
+            proc.stdin.flush()
+            time.sleep(1)
+            proc.send_signal(signal.SIGTERM)
+            proc.wait(timeout=lifecycle.SHUTDOWN_DEADLINE_SECONDS + 10)
+        finally:
+            proc.kill()
+            os.close(out_r)

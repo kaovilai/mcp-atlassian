@@ -235,8 +235,13 @@ class TestMainTransportSelection:
 
     def test_signal_shutdown_exits_without_joining_stdin_reader(self, mock_server):
         """Signal shutdown must not wait on the blocked stdin reader thread."""
+
+        def interrupted_run(coro):
+            coro.close()
+            raise KeyboardInterrupt
+
         with patch("mcp_atlassian.servers.main.AtlassianMCP", return_value=mock_server):
-            with patch("asyncio.run", side_effect=KeyboardInterrupt):
+            with patch("asyncio.run", side_effect=interrupted_run):
                 with patch("mcp_atlassian.setup_signal_handlers"):
                     with patch.dict("os.environ", {"TRANSPORT": "stdio"}):
                         with patch("sys.argv", ["mcp-atlassian"]):
